@@ -1,0 +1,92 @@
+# This is a reusable workflow
+name: SBT BUILD
+
+# Controls when the workflow will run
+on:
+  workflow_call:
+    inputs:
+      repo_name:
+        description: 'repo to be build and deploy'
+        required: true
+        type: string
+      repo_ref:
+        description: 'repo branch to build'
+        required: true
+        type: string
+    secrets:
+      HPE_ARTIFACTORY_BBOB_USERNAME: 
+        required: true
+      HPE_ARTIFACTORY_BBOB_API_KEY:
+        required: true
+      GHE_INFOSIGHT_TOKEN:
+        required: true
+      GHE_HARMONY_BASE_URL:
+        required: true
+      GLCP_GH_TOKEN:
+        required: true
+
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    # runs-on: [  self-hosted, Linux, glcp-lvs-infosight ]
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      - name: Add SBT credentials for Artifactory
+        uses: glcp/harmony-actions-artifactory-credentials@master
+        with:
+          ARTIFACTORY_USER: ${{ secrets.HPE_ARTIFACTORY_BBOB_USERNAME }}
+          ARTIFACTORY_PWD: ${{ secrets.HPE_ARTIFACTORY_BBOB_API_KEY }}
+
+      - name: Copy Credentials to right location
+        run: |
+          set -e -x
+          mkdir -p $HOME/.ivy2/
+          cp "/home/runner/work/_temp/_github_home/.ivy2/.credentials-hpeartifacts.jfrog.io" \
+            "$HOME/.ivy2/.credentials-hpeartifacts.jfrog.io"
+          
+      - name: Login to Docker
+        uses: docker/login-action@v2
+        with:
+          registry: hpeartifacts-docker-harmony.jfrog.io
+          username: ${{ secrets.HPE_ARTIFACTORY_BBOB_USERNAME }}
+          password: ${{ secrets.HPE_ARTIFACTORY_BBOB_API_KEY }}
+
+      - name: setup repository
+        run: |
+          export repo="${{inputs.repo_name}}"
+          if [ -z "$repo" ]  #If no repo then exit with error
+          then
+            echo No repo specified. Exiting workflow.
+            exit 2
+          fi  
+      
+      - name: clone from repository GHE_HARMONY_BASE_URL
+        id: clone
+        continue-on-error: true
+        run: |
+          echo "Cloning from GHE_HARMONY_BASE_URL"  
+          git clone https://${{secrets.GHE_INFOSIGHT_TOKEN}}@${{secrets.GHE_HARMONY_BASE_URL}}/${{inputs.repo_name}}
+          echo -n "" > clone_complete
+      
+      - name: clone from repository from github.com/glcp
+        id: clone1
+        run: |   
+          if [ ! -f "clone_complete" ]
+          then  
+            echo "Cloning from github.com/glcp"  
+            git clone https://${{secrets.GLCP_GH_TOKEN}}@github.com/glcp/${{inputs.repo_name}}
+          fi
+      
+      - name: Build repository and deploy
+        if: steps.clone.outcome == 'success' || steps.clone1.outcome == 'success' 
+        run: |
+          cd ${{inputs.repo_name}}
+          ls -l
+          git checkout ${{inputs.repo_ref}}
+          echo using sbt.build
+          sbt build
